@@ -30,11 +30,11 @@ resource "aws_iam_role_policy" "optimizer_lambda_policy" {
           "ec2:DescribeSecurityGroups",   
           "ec2:DescribeNatGateways",      
           # --- Actions (only performed if not DRY_RUN) ---
-          "ec2:TerminateInstances",
-          "ec2:DeleteVolume",
-          "ec2:ModifyVolume",
-          "ec2:DeleteSnapshot",
-          "ec2:ReleaseAddress"
+          #"ec2:TerminateInstances",
+          #"ec2:DeleteVolume",
+          #"ec2:ModifyVolume",
+          #"ec2:DeleteSnapshot",
+          #"ec2:ReleaseAddress"
         ],
         "Resource": "*"
       },
@@ -48,7 +48,7 @@ resource "aws_iam_role_policy" "optimizer_lambda_policy" {
           "elasticloadbalancing:DescribeTargetGroups",
           "elasticloadbalancing:DescribeTargetHealth",
           # Action
-          "elasticloadbalancing:DeleteLoadBalancer"
+          #"elasticloadbalancing:DeleteLoadBalancer"
         ],
         "Resource": "*"
       },
@@ -72,7 +72,7 @@ resource "aws_iam_role_policy" "optimizer_lambda_policy" {
           "logs:DescribeLogGroups",
           "logs:ListTagsLogGroup",
           # Action
-          "logs:PutRetentionPolicy"
+          #"logs:PutRetentionPolicy"
         ],
         "Resource": "*"
       },
@@ -87,10 +87,10 @@ resource "aws_iam_role_policy" "optimizer_lambda_policy" {
           "rds:DescribeDBClusters",
           "rds:DescribeDBClusterSnapshots",
           # Actions
-          "rds:ModifyDBInstance",
-          "rds:ModifyDBCluster",
-          "rds:DeleteDBSnapshot",
-          "rds:DeleteDBClusterSnapshot"
+          #"rds:ModifyDBInstance",
+          #"rds:ModifyDBCluster",
+          #"rds:DeleteDBSnapshot",
+          #"rds:DeleteDBClusterSnapshot"
         ],
         "Resource": "*"
       },
@@ -111,7 +111,7 @@ resource "aws_iam_role_policy" "optimizer_lambda_policy" {
           "s3:GetBucketVersioning",
           "s3:ListBucket",
           "s3:GetObject",
-          "s3:DeleteObject",
+          #"s3:DeleteObject",
           "s3:PutObject" 
         ],
         "Resource": [
@@ -142,6 +142,7 @@ resource "aws_iam_role_policy" "optimizer_lambda_policy" {
           "lambda:ListTags",
           "eks:ListClusters",
           "eks:DescribeCluster",
+          "eks:DescribeAddonVersions",
           "eks:ListNodegroups",
           "eks:ListFargateProfiles",
           "eks:ListTagsForResource" 
