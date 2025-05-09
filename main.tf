@@ -10,17 +10,20 @@ terraform {
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
+
 # Archive the Lambda code
 data "archive_file" "lambda_zip" {
   type        = "zip"
   source_dir  = "${path.module}/lambda"
-  output_path = "${path.module}/lambda_payload.zip"
+  output_path = "${path.module}/lambda_function_payload.zip"
 }
 
 # IAM Role for Lambda
 resource "aws_iam_role" "optimizer_lambda_role" {
   name = "CostOptimizerLambdaRole-${data.aws_region.current.name}"
-  tags = var.tags
+  tags = merge(local.standard_tags, {
+    "Name" = "Cost-optimizer-iam-role"
+  })
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -41,7 +44,9 @@ resource "aws_iam_role" "optimizer_lambda_role" {
 resource "aws_cloudwatch_log_group" "optimizer_lambda_log_group" {
   name              = "/aws/lambda/cost-optimizer-lambda"
   retention_in_days = var.log_retention_in_days
-  tags              = var.tags
+  tags = merge(local.standard_tags, {
+    "Name" = "Cost-optimizer-log-group"
+  })
 }
 
 resource "aws_lambda_function" "cost_optimizer_lambda" {
@@ -53,6 +58,9 @@ resource "aws_lambda_function" "cost_optimizer_lambda" {
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = var.lambda_timeout
   memory_size      = var.lambda_memory_size
+  tags = merge(local.standard_tags, {
+    "Name" = "Cost-optimizer-lambda"
+  })
 
   # Pass configuration as environment variables
   environment {
@@ -66,7 +74,7 @@ resource "aws_lambda_function" "cost_optimizer_lambda" {
       EC2_STOPPED_DAYS_THRESHOLD                  = var.ec2_stopped_days_threshold
       ENABLE_EC2_INSTANCE_TYPE_OPTIMIZATION_REPORTING = var.enable_ec2_instance_type_optimization_reporting
       ENABLE_EBS_GP2_TO_GP3_CONVERSION            = var.enable_ebs_gp2_to_gp3_conversion
-      ENABLE_EBS_GP2_TO_GP3_CONVERSION_FOR_ROOT   = var.enable_ebs_gp2_to_gp3_conversion_for_root # Added missing var pass-through
+      ENABLE_EBS_GP2_TO_GP3_CONVERSION_FOR_ROOT   = var.enable_ebs_gp2_to_gp3_conversion_for_root 
       ENABLE_EBS_AVAILABLE_VOLUME_DELETION        = var.enable_ebs_available_volume_deletion
       ENABLE_EBS_SNAPSHOT_DELETION                = var.enable_ebs_snapshot_deletion
       EBS_SNAPSHOT_RETENTION_DAYS                 = var.ebs_snapshot_retention_days
@@ -112,13 +120,12 @@ resource "aws_lambda_function" "cost_optimizer_lambda" {
       LAMBDA_IDLE_DAYS_THRESHOLD                  = var.lambda_idle_days_threshold
       LAMBDA_IDLE_INVOCATION_THRESHOLD            = var.lambda_idle_invocation_threshold
       ENABLE_EKS_UNUSED_CLUSTER_REPORTING         = var.enable_eks_unused_cluster_reporting
+      EKS_EXTENDED_SUPPORT_PRICE_HOURLY           = var.eks_extended_support_price_hourly
     }
   }
 
-  tags = var.tags
-
   # Ensure logs go to the dedicated group
-  depends_on = [aws_cloudwatch_log_group.optimizer_lambda_log_group, aws_iam_role_policy.optimizer_lambda_policy] # Explicit dependency on policy
+  depends_on = [aws_cloudwatch_log_group.optimizer_lambda_log_group, aws_iam_role_policy.optimizer_lambda_policy, aws_iam_role.optimizer_lambda_role] # Explicit dependency on policy
 }
 
 
@@ -145,16 +152,53 @@ resource "aws_lambda_permission" "allow_cloudwatch_to_call_lambda" {
 
 resource "aws_s3_bucket" "report_bucket" {
   bucket = var.report_bucket_name # Ensure this var defines a globally unique name
-  tags   = var.tags
-
-  # Consider adding lifecycle rules, versioning, or access logging as needed
-  # lifecycle_rule { ... }
-  # versioning { enabled = true }
+  tags = merge(local.standard_tags, {
+    "Name"           = "cost-optimizer-s3-reporting-bucket",
+    "Purpose"        = "Cost Optimization - Reporting",
+    "ExpirationDate" = "Never",
+    "SLA"            = "99.99",
+    "NPI"            = "False"
+  }) 
 }
 
+resource "aws_s3_bucket_public_access_block" "report_bucket" {
+  bucket = aws_s3_bucket.report_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "report_bucket" {
+  bucket = aws_s3_bucket.report_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "report_bucket" {
+  bucket = aws_s3_bucket.report_bucket.id
+
+  rule {
+    id     = "expiration-policy"
+    status = "Enabled"
+    expiration {
+      days = 90
+    }
+  }
+}
+
+# Create an SNS topic for notifications
 resource "aws_sns_topic" "notifications" {
   name = var.sns_topic_name
-  tags = var.tags
+  kms_master_key_id = "alias/aws/sns"
+  tags = merge(local.standard_tags, {
+    "Name" = "Cost-optimizer-sns-topic"
+  })  
 }
 
 resource "aws_sns_topic_subscription" "email_subscription" {
