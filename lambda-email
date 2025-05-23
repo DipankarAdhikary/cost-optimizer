@@ -1,0 +1,130 @@
+import boto3
+import os
+import time
+import logging
+from datetime import datetime, timedelta
+
+# Set up logging
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+logs_client = boto3.client('logs')
+sns_client = boto3.client('sns')
+
+# Set these environment variables in the Lambda function configuration
+log_group_name = os.environ['LOG_GROUP_NAME']
+filter_pattern = '{ $.log_processed.level = \"ERROR\" && ($.log_processed.errorMessage = \"*{Communication Failure|NullPointerException|FormatFactory writeObject failed|Application encountered error|Request failed: UnknownHostException|cannot be cast to class|Algorithm negotiation fail|ActiveMQConnectionTimedOutException|Mandate not found|ReadTimeOut|Incoming Communications failed|Failed to load payment file|FormatFactory: 1 errors|Could not find nor determine order type|incoming routing is missing|Database upgrade failed:|objects present in a non-final state|objects present in pending/partial approved|FailureException: javax.persistence.PersistenceException|LockAcquisitionException|RollbackException|UnmarshalException: Problem finding error class|EJB Invocation failed on component CRUDSessionBean|Not in GZIP format|EmptyStackException: Empty stack|org.bouncycastle.openpgp.PGPException*\" ) }'
+SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+EKS_CLUSTER_NAME = os.environ['EKS_CLUSTER_NAME']
+ENV_NAME = os.environ["ENV_NAME"]
+
+def get_log_streams(log_group_name, filter_keyword):
+    log_streams = []
+    next_token = None
+
+    while True:
+        try:
+            # List log streams in the log group
+            params = {
+                'logGroupName': log_group_name,
+                'orderBy': 'LastEventTime',
+                'descending': True,
+                'limit': 50
+            }
+            if next_token:
+                params['nextToken'] = next_token
+
+            log_streams_response = logs_client.describe_log_streams(**params)
+            log_streams.extend(log_streams_response['logStreams'])
+            next_token = log_streams_response.get('nextToken')
+
+            if not next_token:
+                break
+        except Exception as e:
+            logger.error(f"Error listing log streams: {e}")
+            raise
+
+    # Filter log streams by keyword
+    filtered_log_streams = [stream for stream in log_streams if filter_keyword in stream['logStreamName']]
+    return filtered_log_streams
+
+def query_logs(log_group_name, log_stream_name, filter_pattern, start_time, end_time):
+    try:
+        logger.info(f"Querying CloudWatch Logs for stream: {log_stream_name}")
+        response = logs_client.filter_log_events(
+            logGroupName=log_group_name,
+            logStreamNames=[log_stream_name],
+            filterPattern=filter_pattern,
+            startTime=start_time,
+            endTime=end_time
+        )
+        logger.info(f"CloudWatch Logs response: {response}")
+        return response['events']
+    except Exception as e:
+        logger.error(f"Error querying logs: {e}")
+        raise
+
+def send_sns_message(subject, message):
+    try:
+        max_message_length = 256 * 1024  # 256 KB
+        if len(message) > max_message_length:
+            logger.error("Message too long to send via SNS")
+            # Split the message and send multiple parts
+            parts = [message[i:i + max_message_length] for i in range(0, len(message), max_message_length)]
+            for idx, part in enumerate(parts):
+                sns_client.publish(
+                    TopicArn=SNS_TOPIC_ARN,
+                    Subject=f"{subject} (part {idx + 1})",
+                    Message=part
+                )
+                logger.info(f"SNS notification part {idx + 1} sent successfully.")
+        else:
+            sns_client.publish(
+                TopicArn=SNS_TOPIC_ARN,
+                Subject=subject,
+                Message=message
+            )
+            logger.info("SNS notification sent successfully.")
+    except Exception as e:
+        logger.error(f"Error sending SNS notification: {e}")
+        raise
+
+def lambda_handler(event, context):
+    logger.info("Lambda function started...")
+    try:
+        # List log streams with the specified keyword
+        log_streams = get_log_streams(log_group_name, "payment-hub-trax")
+        if not log_streams:
+            logger.warning(f"No log streams found for log group: {log_group_name}")
+            return
+        logger.info(f"Found {len(log_streams)} log streams.")
+        # Get current time and set time range for querying logs
+        end_time = int(time.time() * 1000)  # current time in milliseconds
+        start_time = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)  # 5 minutes earlier
+        logger.debug(f"Time window for log query: start_time={start_time}, end_time={end_time}")
+        # Loop through log streams and query logs
+        for log_stream in log_streams:
+            log_stream_name = log_stream['logStreamName']
+            logger.debug(f"Searching in log stream: {log_stream_name}")
+            # Query logs in this stream
+            log_events = query_logs(log_group_name, log_stream_name, filter_pattern, start_time, end_time)
+            if log_events:
+                logger.info(f"Found {len(log_events)} low severity error log events.")
+                # Send an SNS notification
+                send_sns_message(
+                    subject=f"PHSE-MT-DEV: Low severity error detected in Payment-Hub Standard Edition's {ENV_NAME} environment",
+                    message=(
+                        f"Hello Team,\n\n"
+                        f"A low severity error log event has been detected in cluster '{EKS_CLUSTER_NAME}'.\n" 
+                        f"Log group: {log_group_name}.\n" 
+                        f"Log stream: {log_stream_name}.\n\n"
+                        f"Please find below the event details and investigate the issue as soon as possible:\n\n"
+                        f"{log_events}\n"
+                    )
+                )
+                break
+            else:
+                logger.info(f"No low severity error logs found in stream: {log_stream_name}")
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+        raise
+    logger.info("Lambda function completed.")
