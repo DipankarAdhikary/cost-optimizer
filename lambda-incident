@@ -1,0 +1,196 @@
+
+# Import required modules
+import json
+import boto3
+import os
+import re
+import sys
+
+# Create Boto3 stuff
+sns = boto3.client('sns')
+cloudwatch = boto3.client('cloudwatch')
+ec2 = boto3.resource('ec2')
+rg = boto3.client('resource-groups')
+
+
+#################################
+#  Initialize Global Variables  #
+#################################
+
+# Define variables for SNS Topic and Subscription
+XMATTERS_TOPIC_NAME="FIS-Monitoring-Topic-xMatters"
+
+# Identify supported alarm tags
+allowedAlarmTags = ['severity','hostname','os','type','disk','incidentgroup','callout','ec2instanceid']
+
+
+###############
+#  Functions  #
+###############
+
+# This function is the main event handler.  It accepts the event, parses it,
+# adds alarm tag information, and publishes it to SNS
+def lambda_handler(event, context):
+    
+    # Print the raw event content
+    print("Raw Event:")
+    print(event)
+    rawevent = json.dumps(event)
+    
+    # Get SNS Topic ARN
+    print("Checking for xMatters SNS Topic.")
+    sns_topic_arn = get_sns_topic()
+    
+    # Exit if SNS Topic doesn't exist
+    if (sns_topic_arn == ''):
+        print(XMATTERS_TOPIC_NAME + " does not exist. Exiting.")
+        return(XMATTERS_TOPIC_NAME + " does not exist. Exiting.")
+
+    # Determine event source
+    source = event['source']
+    
+    # Route the event appropriately
+    if (source == "aws.cloudwatch"):
+        event_is_cloudwatch(event,rawevent,allowedAlarmTags,sns_topic_arn)
+    elif (source == "aws.applicationinsights"):
+        event_is_appinsights(event,rawevent,allowedRGTags,sns_topic_arn)
+    else:
+        print("Event source, " + source + ", is not supported yet. Exiting.")
+        return("Event source, " + source + ", is not supported yet. Exiting.")
+
+# Use this to parse cloudwatch alarms
+def event_is_cloudwatch(event,rawevent,allowedTags,sns_topic_arn):
+    
+    # Print the list of supported alarm tags
+    print("Supported Alarm Tags:")
+    print(allowedTags)
+    
+    # Parse out desired data
+    source = event['source']
+    alarm_arn = event['alarmArn']
+    alarm_name = event['alarmData']['alarmName']
+    alarm_description = event['alarmData']['configuration']['description']
+    account_id = event['accountId']
+    time = event['time']
+    region = event['region']
+    alarm_state = event['alarmData']['state']['value']
+    alarm_reason = event['alarmData']['state']['reason']
+    
+    alarm_state_for_subject = alarm_state
+    if (alarm_state_for_subject == 'ALARM'):
+        alarm_state_for_subject = 'Alarm'
+
+    # Compile Subject for SNS Topic
+    subject = (
+        f"AWS {alarm_state_for_subject}: {alarm_name}"
+    )
+    
+    # Convert raw event to a string to use as the SNS Message
+    message = "{"
+    message += "\"AlarmName\":\"" + alarm_name + "\","
+    message += "\"AlarmDescription\":\"" + alarm_description + "\","
+    message += "\"AWSAccountId\":\"" + account_id + "\","
+    message += "\"Region\":\"" + region + "\","
+    message += "\"StateChangeTime\":\"" + time + "\","
+    message += "\"NewStateValue\":\"" + alarm_state + "\","
+    message += "\"NewStateReason\":\"" + alarm_reason + "\""
+    message += "}"
+    
+    # Create dictionary of fields for SNS MessageAttributes value
+    messageAttributes = {}
+    messageAttributes['source'] = {"DataType": "String", "StringValue": source}
+    messageAttributes['rawevent'] = {"DataType": "String", "StringValue": rawevent}
+    messageAttributes['fromlambda'] = {"DataType": "String", "StringValue": "yes"}
+    
+    # Get alarm tags
+    alarm_tags = cloudwatch.list_tags_for_resource(ResourceARN=alarm_arn)['Tags']
+    
+    # Initialize maintenance flag
+    inMaintenance = 'false'
+    
+    # Add alarm tags to the messageAttributes dictionary
+    severity_found = ''
+    type_found = ''
+    for tag in alarm_tags:
+        alarm_tag = tag['Key']
+        alarm_value = tag['Value']
+        
+        # Only include supoprted alarm tags
+        if alarm_tag in allowedTags:
+            print("Found Alarm Tag: " + alarm_tag + " = " + alarm_value)
+            messageAttributes[alarm_tag] = {"DataType": "String", "StringValue": alarm_value}
+        
+            if alarm_tag == 'ec2instanceid':
+                instance = ec2.Instance(alarm_value)
+                if not (instance == ''):
+                    inMaintenance = check_maintenance(instance,"FIS-Monitoring-Maintenance")
+                    
+            if alarm_tag == 'severity':
+                severity_found = "yes"
+            
+            if alarm_tag == 'type':
+                type_found = "yes"
+                
+    # Include the default severity if it wasn't found in a tag
+    if severity_found == '':
+        messageAttributes['severity'] = {"DataType": "String", "StringValue": "Medium"}
+        
+    
+	# Include the default type if it wasn't found in a tag
+    if type_found == '':
+        messageAttributes['type'] = {"DataType": "String", "StringValue": "unspecified"}
+
+    # Publish the message to the SNS topic and get the response
+    # Unless there's a FIS-Monitoring-Maintenance=true tag on the EC2 instance
+    response = "Alarm ignored due to FIS-Monitoring-Maintenance=true tag on the EC2 instance"
+    if (inMaintenance == 'false'):
+        response = publish_alarm(sns_topic_arn,subject,message,messageAttributes)
+        print("Publishing event to SNS Topic")
+
+    # Print and return the response
+    print(response)
+    return(response)
+
+
+    
+# This function publishes to the SNS Topic
+def publish_alarm(sns_topic_arn,subject,message,messageAttributes):
+    response = sns.publish(TopicArn=sns_topic_arn, Subject=subject, Message=message, MessageAttributes=messageAttributes)
+    
+    # Return the response
+    return(response)
+    
+
+# This function gets the SNS topic         
+def get_sns_topic():
+    existingTopics = sns.list_topics()
+
+    topicExists = ''
+    topicArn = ''
+    for topic in existingTopics["Topics"]:
+      arn = topic.get("TopicArn")
+      p = re.compile(r'' + XMATTERS_TOPIC_NAME)
+      foundIt = p.search(arn)
+      if (foundIt):
+        topicExists='yes'
+        topicArn=arn
+        print(XMATTERS_TOPIC_NAME + " exists.")
+
+    if topicArn == '':
+        print(XMATTERS_TOPIC_NAME + " does not exist.")
+
+    return(topicArn)
+
+
+# This function checks for the maintenance tag if we have the instance ID
+def check_maintenance(instance,tagName):
+  tagValue = 'false'
+  for tag in instance.tags:
+      if (tag['Key']==tagName):
+        tagValue=(tag['Value'])
+        print("EC2 maintenance tag found: " + tagName + " = " + tagValue)
+        tagValue.lower()
+  if not (tagValue == 'true'):
+      tagValue = 'false'
+      
+  return tagValue
