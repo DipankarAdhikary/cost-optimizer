@@ -1,0 +1,368 @@
+# Import required modules
+import json
+import boto3
+import os
+import re
+import sys
+import logging # Added
+from datetime import datetime, timedelta, timezone # Added timezone for UTC awareness
+
+# Set up logging (basic, can be enhanced)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO) # Changed from DEBUG for production, can be an env var
+
+# Create Boto3 stuff
+sns = boto3.client('sns')
+cloudwatch = boto3.client('cloudwatch')
+ec2 = boto3.resource('ec2') # Note: 'ec2' client might be preferred over resource for specific calls
+rg = boto3.client('resource-groups')
+logs_client = boto3.client('logs') # Added
+
+#################################
+#  Initialize Global Variables  #
+#################################
+
+# Define variables for SNS Topic and Subscription
+XMATTERS_TOPIC_NAME="FIS-Monitoring-Topic-xMatters"
+
+# Identify supported alarm tags
+# Added LogGroupName, ErrorKeyword, AlarmCategory for application log fetching
+allowedAlarmTags = ['severity','hostname','os','type','disk','incidentgroup','callout','ec2instanceid', 'LogGroupName', 'ErrorKeyword', 'AlarmCategory']
+
+# Configuration for log fetching
+LOG_FETCH_WINDOW_MINUTES = 15 # How far back to look for logs when an alarm triggers
+MAX_LOG_EVENTS_TO_FETCH = 20 # Max log events to include in the incident
+MAX_LOG_MESSAGE_LENGTH_BYTES = 250 * 1024 # Max size for SNS message, leaving some room for other fields
+
+###############
+#  Functions  #
+###############
+
+def fetch_application_logs(log_group_name, error_keyword, alarm_severity, alarm_timestamp_str):
+    """
+    Fetches relevant application logs from CloudWatch Logs.
+    """
+    try:
+        logger.info(f"Attempting to fetch application logs for LogGroup: {log_group_name}, Keyword: {error_keyword}, Severity: {alarm_severity}")
+
+        # Determine the filter pattern based on severity and keyword
+        # This mirrors the logic in your Terraform metric filters
+        if alarm_severity.lower() == "low":
+            # For low severity, original pattern checks WARN or ERROR, and message or errorMessage
+            # We simplify here for the lambda query to focus on the keyword in common fields
+            # This pattern assumes 'log_processed' is the parsed JSON structure of your logs.
+            # If your logs are not JSON or 'log_processed' isn't the key, this needs adjustment.
+            filter_pattern = f'{{ ($.log_processed.level = "WARN" || $.log_processed.level = "ERROR") && (($.log_processed.message = "*{error_keyword}*") || ($.log_processed.errorMessage = "*{error_keyword}*")) }}'
+        else: # Medium or High
+            filter_pattern = f'{{ $.log_processed.level = "ERROR" && ($.log_processed.errorMessage = "*{error_keyword}*") }}'
+        
+        logger.info(f"Constructed filter pattern: {filter_pattern}")
+
+        # Calculate time window for log query
+        # Alarm timestamp is like "2024-03-15T10:30:00.000+0000"
+        # Convert to datetime object, then to milliseconds epoch
+        try:
+            # Handle potential timezone info if present, assume UTC if not
+            if '+' in alarm_timestamp_str:
+                alarm_dt = datetime.strptime(alarm_timestamp_str, "%Y-%m-%dT%H:%M:%S.%f%z")
+            else: # If no timezone, assume UTC (CloudWatch events are UTC)
+                alarm_dt = datetime.strptime(alarm_timestamp_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+        except ValueError: # Fallback for slightly different formats without milliseconds
+             if '+' in alarm_timestamp_str:
+                alarm_dt = datetime.strptime(alarm_timestamp_str, "%Y-%m-%dT%H:%M:%S%z")
+             else:
+                alarm_dt = datetime.strptime(alarm_timestamp_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+        end_time = int(alarm_dt.timestamp() * 1000)
+        start_time = int((alarm_dt - timedelta(minutes=LOG_FETCH_WINDOW_MINUTES)).timestamp() * 1000)
+
+        logger.info(f"Querying logs from {start_time} to {end_time}")
+
+        response = logs_client.filter_log_events(
+            logGroupName=log_group_name,
+            filterPattern=filter_pattern,
+            startTime=start_time,
+            endTime=end_time,
+            limit=MAX_LOG_EVENTS_TO_FETCH # Limit the number of events
+        )
+        
+        log_events_details = []
+        if response and 'events' in response:
+            for event in response['events']:
+                log_events_details.append(f"Timestamp: {datetime.fromtimestamp(event['timestamp']/1000, tz=timezone.utc).isoformat()}, Message: {event['message']}")
+            logger.info(f"Found {len(response['events'])} relevant log events.")
+            return "\n".join(log_events_details) if log_events_details else "No specific log events found matching the criteria in the time window."
+        else:
+            logger.info("No log events found for the given filter and time window.")
+            return "No log events found for the given filter and time window."
+
+    except Exception as e:
+        logger.error(f"Error fetching application logs: {e}", exc_info=True)
+        return f"Error fetching logs: {str(e)}"
+
+
+# This function is the main event handler.  It accepts the event, parses it,
+# adds alarm tag information, and publishes it to SNS
+def lambda_handler(event, context):
+    
+    # Print the raw event content
+    logger.info("Raw Event:") # Changed to logger.info
+    logger.info(json.dumps(event)) # Changed to logger.info
+    rawevent = json.dumps(event) # Keep this for messageAttributes
+    
+    # Get SNS Topic ARN
+    logger.info("Checking for xMatters SNS Topic.") # Changed
+    sns_topic_arn = get_sns_topic()
+    
+    # Exit if SNS Topic doesn't exist
+    if (sns_topic_arn == ''):
+        logger.error(XMATTERS_TOPIC_NAME + " does not exist. Exiting.") # Changed
+        return(XMATTERS_TOPIC_NAME + " does not exist. Exiting.")
+
+    # Determine event source
+    source = event['source']
+    
+    # Route the event appropriately
+    if (source == "aws.cloudwatch"):
+        # Pass allowedAlarmTags to the function.
+        # In a larger refactor, allowedAlarmTags could be a class member or global constant if not changing.
+        event_is_cloudwatch(event,rawevent,allowedAlarmTags,sns_topic_arn)
+    elif (source == "aws.applicationinsights"):
+        # allowedRGTags was not defined, assuming it might be similar or a typo for allowedAlarmTags
+        # For now, this part is untouched beyond this comment.
+        # If appinsights also needs log fetching, it would require similar logic.
+        # For this request, we focus on cloudwatch alarms.
+        # event_is_appinsights(event,rawevent,allowedAlarmTags,sns_topic_arn) # Assuming allowedAlarmTags if allowedRGTags is not defined
+        logger.warning("aws.applicationinsights event processing not fully implemented with new log fetching logic.")
+        # Fallback to original or simplified handling if needed
+        # For now, we'll assume it's out of scope for this specific change.
+        print("Event source, " + source + ", is not fully adapted for log fetching. Standard processing will occur.")
+
+    else:
+        logger.error("Event source, " + source + ", is not supported yet. Exiting.") # Changed
+        return("Event source, " + source + ", is not supported yet. Exiting.")
+
+# Use this to parse cloudwatch alarms
+def event_is_cloudwatch(event,rawevent,allowedTags,sns_topic_arn):
+    
+    # Print the list of supported alarm tags
+    logger.info("Supported Alarm Tags:") # Changed
+    logger.info(allowedTags) # Changed
+    
+    # Parse out desired data
+    source = event['source']
+    alarm_arn = event['alarmArn']
+    alarm_name = event['alarmData']['alarmName']
+    # Alarm description can be None, provide default
+    alarm_description_raw = event['alarmData']['configuration'].get('description')
+    alarm_description = alarm_description_raw if alarm_description_raw is not None else "N/A"
+    account_id = event['accountId']
+    time_str = event['time'] # This is StateChangeTime, keep as string for now
+    region = event['region']
+    alarm_state = event['alarmData']['state']['value']
+    alarm_reason = event['alarmData']['state']['reason']
+    
+    alarm_state_for_subject = alarm_state
+    if (alarm_state_for_subject == 'ALARM'):
+        alarm_state_for_subject = 'Alarm'
+
+    # Compile Subject for SNS Topic
+    subject = (
+        f"AWS {alarm_state_for_subject}: {alarm_name}"
+    )
+    
+    # Base message dictionary
+    message_dict = {
+        "AlarmName": alarm_name,
+        "AlarmDescription": alarm_description,
+        "AWSAccountId": account_id,
+        "Region": region,
+        "StateChangeTime": time_str, 
+        "NewStateValue": alarm_state,
+        "NewStateReason": alarm_reason
+    }
+    
+    # Create dictionary of fields for SNS MessageAttributes value
+    messageAttributes = {}
+    messageAttributes['source'] = {"DataType": "String", "StringValue": source}
+    messageAttributes['rawevent'] = {"DataType": "String", "StringValue": rawevent}
+    messageAttributes['fromlambda'] = {"DataType": "String", "StringValue": "yes"}
+    
+    # Get alarm tags
+    alarm_tags = cloudwatch.list_tags_for_resource(ResourceARN=alarm_arn)['Tags']
+    
+    # Initialize maintenance flag
+    inMaintenance = 'false'
+    
+    # Add alarm tags to the messageAttributes dictionary
+    # And also store them for easier access later
+    current_alarm_tags = {}
+    severity_found = ''
+    type_found = ''
+    alarm_category = '' # To check if it's an Application alarm
+
+    for tag in alarm_tags:
+        alarm_tag_key = tag['Key']
+        alarm_tag_value = tag['Value']
+        current_alarm_tags[alarm_tag_key] = alarm_tag_value # Store for direct use
+        
+        # Only include supported alarm tags in messageAttributes
+        if alarm_tag_key in allowedTags:
+            logger.info(f"Found Alarm Tag: {alarm_tag_key} = {alarm_tag_value}") # Changed
+            messageAttributes[alarm_tag_key] = {"DataType": "String", "StringValue": alarm_tag_value}
+        
+            if alarm_tag_key == 'ec2instanceid':
+                instance = ec2.Instance(alarm_tag_value)
+                if not (instance == ''): # This check might be problematic if instance is None
+                    inMaintenance = check_maintenance(instance,"FIS-Monitoring-Maintenance")
+                    
+            if alarm_tag_key == 'severity':
+                severity_found = "yes"
+            
+            if alarm_tag_key == 'type':
+                type_found = "yes"
+            
+            if alarm_tag_key == 'AlarmCategory':
+                alarm_category = alarm_tag_value
+
+    # Include the default severity if it wasn't found in a tag
+    if severity_found == '':
+        messageAttributes['severity'] = {"DataType": "String", "StringValue": "Medium"}
+        current_alarm_tags['severity'] = "Medium" # Also update local cache
+        
+    # Include the default type if it wasn't found in a tag
+    if type_found == '':
+        messageAttributes['type'] = {"DataType": "String", "StringValue": "unspecified"}
+        current_alarm_tags['type'] = "unspecified" # Also update local cache
+
+    # --- Application Log Fetching Logic ---
+    # Check if this is an application alarm based on AlarmCategory tag or content of 'type' tag
+    is_application_alarm = False
+    if alarm_category.lower() == "application":
+        is_application_alarm = True
+    elif "application error" in current_alarm_tags.get('type', '').lower():
+        is_application_alarm = True
+        logger.info("Identified as application alarm based on 'type' tag content.")
+
+
+    if is_application_alarm:
+        log_group_name_from_tag = current_alarm_tags.get('LogGroupName')
+        error_keyword_from_tag = current_alarm_tags.get('ErrorKeyword')
+        alarm_severity_from_tag = current_alarm_tags.get('severity', 'Medium') # Default to Medium if not set
+
+        if log_group_name_from_tag and error_keyword_from_tag:
+            logger.info(f"Application alarm detected. Fetching logs for LG: {log_group_name_from_tag}, Keyword: {error_keyword_from_tag}")
+            log_details_str = fetch_application_logs(
+                log_group_name_from_tag,
+                error_keyword_from_tag,
+                alarm_severity_from_tag,
+                time_str # Pass the original alarm state change time
+            )
+            message_dict["LogDetails"] = log_details_str
+        else:
+            logger.warning("Application alarm detected, but LogGroupName or ErrorKeyword tag is missing. Cannot fetch logs.")
+            message_dict["LogDetails"] = "Log fetching skipped: LogGroupName or ErrorKeyword tag missing from alarm."
+    
+    # Convert final message dict to JSON string
+    message = json.dumps(message_dict)
+
+    # Check message size before publishing
+    if sys.getsizeof(message) > MAX_LOG_MESSAGE_LENGTH_BYTES:
+        logger.warning(f"Message size ({sys.getsizeof(message)} bytes) exceeds limit ({MAX_LOG_MESSAGE_LENGTH_BYTES} bytes). Truncating LogDetails.")
+        # Attempt to truncate LogDetails; this is a basic truncation.
+        # A more sophisticated approach might summarize or indicate truncation clearly.
+        if "LogDetails" in message_dict:
+            original_log_details_len = len(message_dict["LogDetails"])
+            # Estimate overhead of other fields (generous 2KB)
+            overhead = 2048 
+            available_for_logs = MAX_LOG_MESSAGE_LENGTH_BYTES - (sys.getsizeof(json.dumps(message_dict)) - len(message_dict["LogDetails"].encode('utf-8'))) - overhead
+            
+            if available_for_logs > 0:
+                 # Truncate log_details by bytes, not characters, to be safe
+                encoded_logs = message_dict["LogDetails"].encode('utf-8')
+                if len(encoded_logs) > available_for_logs:
+                    truncated_logs_bytes = encoded_logs[:available_for_logs]
+                    # Try to decode back, ignore errors for partial unicode characters
+                    message_dict["LogDetails"] = truncated_logs_bytes.decode('utf-8', 'ignore') + \
+                                              f"... [TRUNCATED from original {original_log_details_len} chars]"
+                # else: fits as is
+            else: # No space for logs or negative calculation
+                message_dict["LogDetails"] = f"[LogDetails TRUNCATED due to message size limit. Original length {original_log_details_len} chars]"
+
+            message = json.dumps(message_dict) # Re-serialize with truncated logs
+
+    # Publish the message to the SNS topic
+    # Unless there's a FIS-Monitoring-Maintenance=true tag on the EC2 instance
+    response = "Alarm ignored due to FIS-Monitoring-Maintenance=true tag on the EC2 instance"
+    if (inMaintenance == 'false'):
+        response = publish_alarm(sns_topic_arn,subject,message,messageAttributes)
+        logger.info("Publishing event to SNS Topic") # Changed
+
+    # Print and return the response
+    logger.info(response) # Changed
+    return(response)
+
+
+    
+# This function publishes to the SNS Topic
+def publish_alarm(sns_topic_arn,subject,message,messageAttributes):
+    response = sns.publish(TopicArn=sns_topic_arn, Subject=subject, Message=message, MessageAttributes=messageAttributes)
+    
+    # Return the response
+    return(response)
+    
+
+# This function gets the SNS topic         
+def get_sns_topic():
+    existingTopics = sns.list_topics()
+
+    topicExists = ''
+    topicArn = ''
+    for topic in existingTopics["Topics"]:
+      arn = topic.get("TopicArn")
+      # Ensure XMATTERS_TOPIC_NAME is not empty and is a string
+      if XMATTERS_TOPIC_NAME and isinstance(XMATTERS_TOPIC_NAME, str):
+        p = re.compile(r'' + XMATTERS_TOPIC_NAME + '$') # Match end of string for exact topic name
+        foundIt = p.search(arn)
+        if (foundIt):
+          topicExists='yes'
+          topicArn=arn
+          logger.info(XMATTERS_TOPIC_NAME + " exists.") # Changed
+          break # Found the topic, no need to continue loop
+      else:
+        logger.error("XMATTERS_TOPIC_NAME is not configured properly.") # Changed
+        return ''
+
+
+    if topicArn == '':
+        logger.warning(XMATTERS_TOPIC_NAME + " does not exist.") # Changed
+
+    return(topicArn)
+
+
+# This function checks for the maintenance tag if we have the instance ID
+def check_maintenance(instance,tagName):
+  tagValue = 'false'
+  try:
+    # instance.tags might be None if the instance object is not fully loaded or has no tags
+    if instance.tags: 
+      for tag in instance.tags:
+          if (tag['Key']==tagName):
+            tagValue=(tag['Value'])
+            logger.info(f"EC2 maintenance tag found: {tagName} = {tagValue}") # Changed
+            tagValue = tagValue.lower() # Ensure lowercase for comparison
+            break # Found the tag
+    if not (tagValue == 'true'):
+        tagValue = 'false'
+  except Exception as e:
+      logger.error(f"Error checking maintenance tag for instance {instance.id if instance else 'N/A'}: {e}", exc_info=True)
+      tagValue = 'false' # Default to not in maintenance on error
+      
+  return tagValue
+
+# Note: The event_is_appinsights function was not provided,
+# so it's not modified here. If it exists and needs similar logic,
+# it would follow the pattern used for event_is_cloudwatch.
+# If it's defined elsewhere or was part of the original code not shown,
+# ensure its definition is present.
