@@ -1,0 +1,27 @@
+# CloudWatch Alarms for low severity errors
+resource "aws_cloudwatch_metric_alarm" "low_severity_application_error_alarms" {
+  for_each            = toset(local.sanitized_low_severity_keywords)
+  alarm_name          = "${var.alarm_prefix}-Application-Error-${var.cus_short_lower}-${var.app_short_lower}-${var.env_short_lower}-${each.key}-alarm"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = var.evaluation_periods
+  period              = var.period
+  threshold           = var.threshold
+  statistic           = "Sum"
+  alarm_description   = "${each.key} error has occurred in the log events."
+  metric_name         = aws_cloudwatch_log_metric_filter.low_severity_application_error[each.key].metric_transformation[0].name
+  namespace           = aws_cloudwatch_log_metric_filter.low_severity_application_error[each.key].metric_transformation[0].namespace
+  alarm_actions       = data.aws_lambda_function.fis_monitoring.*.arn
+  ok_actions          = data.aws_lambda_function.fis_monitoring.*.arn
+  insufficient_data_actions = []
+
+  tags = {
+    callout         = var.callout
+    severity        = "Low"
+    type            = "Low severity Payment-Hub application error"
+    incidentgroup   = var.tag_support_group
+    SupportGroup    = var.tag_support_group
+    AppGroupEmail   = var.tag_app_group_email
+    EnvironmentType = var.env_code_lower == "p" ? "Production" : "Test"
+    Name            = "${var.alarm_prefix}-${var.cus_short_lower}-${var.app_short_lower}-${var.env_short_lower}-Low severity application error-test-module"
+  }
+}
