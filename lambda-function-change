@@ -1,0 +1,13 @@
+resource "aws_lambda_function" "payment_hub_observability_lambda" {
+  # ... other configurations ...
+  handler          = "app-error.lambda_handler" # Make sure this matches
+  environment {
+    variables = {
+      TARGET_SNS_TOPIC_ARN              = "arn:aws:sns:YOUR_REGION:YOUR_ACCOUNT_ID:FIS-Monitoring-Topic-xMatters" # Replace with actual ARN
+      LOG_LEVEL                         = "INFO" # or DEBUG
+      LOG_QUERY_WINDOW_MINUTES_FALLBACK = "5"
+      MAX_STACK_TRACE_LENGTH            = "1000"
+      LOG_EVENTS_LIMIT                  = "1" 
+    }
+  }
+}
