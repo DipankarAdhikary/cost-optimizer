@@ -27,13 +27,12 @@ LOG_EVENTS_LIMIT = int(os.environ.get('LOG_EVENTS_LIMIT', '1'))
 def parse_datetime_from_iso(timestamp_str):
     """Safely parse ISO 8601 timestamp string."""
     try:
+        # Replace "+0000" with "+00:00" to make the string ISO 8601-compliant
+        if timestamp_str.endswith("+0000"):
+            timestamp_str = timestamp_str[:-5] + "+00:00"
         return datetime.fromisoformat(timestamp_str)
-    except ValueError:
-        # Handle cases like "Z" for UTC timezone if fromisoformat has issues on older Pythons
-        # or slightly non-compliant formats. For modern Python 3.9+, fromisoformat is robust.
-        logger.warning(f"Could not parse timestamp '{timestamp_str}' directly, attempting with Z replacement.")
-        if timestamp_str.endswith('Z'):
-            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+    except ValueError as e:
+        logger.error(f"Could not parse timestamp '{timestamp_str}': {e}")
         raise
 
 def get_alarm_tags(alarm_arn):
