@@ -1,27 +1,82 @@
-# CloudWatch Alarms for low severity errors
-resource "aws_cloudwatch_metric_alarm" "low_severity_application_error_alarms" {
-  for_each            = toset(local.sanitized_low_severity_keywords)
-  alarm_name          = "${var.alarm_prefix}-Application-Error-${var.cus_short_lower}-${var.app_short_lower}-${var.env_short_lower}-${each.key}-alarm"
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  evaluation_periods  = var.evaluation_periods
-  period              = var.period
-  threshold           = var.threshold
-  statistic           = "Sum"
-  alarm_description   = "${each.key} error has occurred in the log events."
-  metric_name         = aws_cloudwatch_log_metric_filter.low_severity_application_error[each.key].metric_transformation[0].name
-  namespace           = aws_cloudwatch_log_metric_filter.low_severity_application_error[each.key].metric_transformation[0].namespace
-  alarm_actions       = data.aws_lambda_function.fis_monitoring.*.arn
-  ok_actions          = data.aws_lambda_function.fis_monitoring.*.arn
-  insufficient_data_actions = []
+2025-05-30T18:07:26.684Z
+INIT_START Runtime Version: python:3.9.v94	Runtime Version ARN: arn:aws:lambda:us-east-1::runtime:b0187a72e2a0474a536ecdeed24a9131d82aa650b5a85f12efc5c2b09011a8b5
 
-  tags = {
-    callout         = var.callout
-    severity        = "Low"
-    type            = "Low severity Payment-Hub application error"
-    incidentgroup   = var.tag_support_group
-    SupportGroup    = var.tag_support_group
-    AppGroupEmail   = var.tag_app_group_email
-    EnvironmentType = var.env_code_lower == "p" ? "Production" : "Test"
-    Name            = "${var.alarm_prefix}-${var.cus_short_lower}-${var.app_short_lower}-${var.env_short_lower}-Low severity application error-test-module"
-  }
+INIT_START Runtime Version: python:3.9.v94 Runtime Version ARN: arn:aws:lambda:us-east-1::runtime:b0187a72e2a0474a536ecdeed24a9131d82aa650b5a85f12efc5c2b09011a8b5
+2025-05-30T18:07:27.112Z
+START RequestId: faf569b5-6211-4d39-afb4-368713cead7e Version: $LATEST
+
+START RequestId: faf569b5-6211-4d39-afb4-368713cead7e Version: $LATEST
+2025-05-30T18:07:27.113Z
+[INFO]	2025-05-30T18:07:27.113Z	faf569b5-6211-4d39-afb4-368713cead7e	Received event: 
+{
+    "source": "aws.cloudwatch",
+    "alarmArn": "arn:aws:cloudwatch:us-east-1:024848441612:alarm:multi-phse-dev-use1-create netty connection",
+    "accountId": "024848441612",
+    "time": "2025-05-30T18:07:26.430+0000",
+    "region": "us-east-1",
+    "alarmData": {
+        "alarmName": "multi-phse-dev-use1-create netty connection",
+        "state": {
+            "value": "ALARM",
+            "reason": "Threshold Crossed: 1 datapoint [2.0 (30/05/25 18:06:00)] was greater than or equal to the threshold (1.0).",
+            "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2025-05-30T18:07:26.429+0000\",\"startDate\":\"2025-05-30T18:06:00.000+0000\",\"statistic\":\"Sum\",\"period\":60,\"recentDatapoints\":[2.0],\"threshold\":1.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2025-05-30T18:06:00.000+0000\",\"sampleCount\":2.0,\"value\":2.0}]}",
+            "timestamp": "2025-05-30T18:07:26.430+0000"
+        },
+        "previousState": {
+            "value": "INSUFFICIENT_DATA",
+            "reason": "Unchecked: Initial alarm creation",
+            "timestamp": "2025-05-30T18:05:31.707+0000"
+        },
+        "configuration": {
+            "description": "create netty connection error has occurred in the log events.",
+            "metrics": [
+                {
+                    "id": "cecb912f-6e5d-cbb1-3c52-f79c810f7fe0",
+                    "metricStat": {
+                        "metric": {
+                            "namespace": "Payment-Hub_Application_Error_Monitoring",
+                            "name": "create netty connection_Count",
+                            "dimensions": {}
+                        },
+                        "period": 60,
+                        "stat": "Sum"
+                    },
+                    "returnData": true
+                }
+            ]
+        }
+    }
 }
+
+
+[INFO] 2025-05-30T18:07:27.113Z faf569b5-6211-4d39-afb4-368713cead7e Received event: {"source": "aws.cloudwatch", "alarmArn": "arn:aws:cloudwatch:us-east-1:024848441612:alarm:multi-phse-dev-use1-create netty connection", "accountId": "024848441612", "time": "2025-05-30T18:07:26.430+0000", "region": "us-east-1", "alarmData": {"alarmName": "multi-phse-dev-use1-create netty connection", "state": {"value": "ALARM", "reason": "Threshold Crossed: 1 datapoint [2.0 (30/05/25 18:06:00)] was greater than or equal to the threshold (1.0).", "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2025-05-30T18:07:26.429+0000\",\"startDate\":\"2025-05-30T18:06:00.000+0000\",\"statistic\":\"Sum\",\"period\":60,\"recentDatapoints\":[2.0],\"threshold\":1.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2025-05-30T18:06:00.000+0000\",\"sampleCount\":2.0,\"value\":2.0}]}", "timestamp": "2025-05-30T18:07:26.430+0000"}, "previousState": {"value": "INSUFFICIENT_DATA", "reason": "Unchecked: Initial alarm creation", "timestamp": "2025-05-30T18:05:31.707+0000"}, "configuration": {"description": "create netty connection error has occurred in the log events.", "metrics": [{"id": "cecb912f-6e5d-cbb1-3c52-f79c810f7fe0", "metricStat": {"metric": {"namespace": "Payment-Hub_Application_Error_Monitoring", "name": "create netty connection_Count", "dimensions": {}}, "period": 60, "stat": "Sum"}, "returnData": true}]}}}
+2025-05-30T18:07:27.211Z
+[INFO]	2025-05-30T18:07:27.210Z	faf569b5-6211-4d39-afb4-368713cead7e	Retrieved tags for alarm arn:aws:cloudwatch:us-east-1:024848441612:alarm:multi-phse-dev-use1-create netty connection: {'severity': 'Low', 'AppGroupEmail': 'cm.cl.platform.paymenthubtechnicalsupport@fisglobal.com', 'EnvironmentType': 'Test', 'callout': 'N', 'incidentgroup': 'Corporate Liquidity - Platform - Payment Hub Standard Edition Technical Support', 'SupportGroup': 'Corporate Liquidity - Platform - Payment Hub Standard Edition Technical Support', 'LogGroupName': '/aws/containerinsights/multi-phse-dev-use1/application', 'ErrorKeyword': 'create netty connection', 'type': 'Low severity Payment-Hub application error', 'AlarmCategory': 'Application', 'Name': 'FIS-Monitoring-multi-phse-dev-use1-Low severity application error-test-module'}
+
+[INFO] 2025-05-30T18:07:27.210Z faf569b5-6211-4d39-afb4-368713cead7e Retrieved tags for alarm arn:aws:cloudwatch:us-east-1:024848441612:alarm:multi-phse-dev-use1-create netty connection: {'severity': 'Low', 'AppGroupEmail': 'cm.cl.platform.paymenthubtechnicalsupport@fisglobal.com', 'EnvironmentType': 'Test', 'callout': 'N', 'incidentgroup': 'Corporate Liquidity - Platform - Payment Hub Standard Edition Technical Support', 'SupportGroup': 'Corporate Liquidity - Platform - Payment Hub Standard Edition Technical Support', 'LogGroupName': '/aws/containerinsights/multi-phse-dev-use1/application', 'ErrorKeyword': 'create netty connection', 'type': 'Low severity Payment-Hub application error', 'AlarmCategory': 'Application', 'Name': 'FIS-Monitoring-multi-phse-dev-use1-Low severity application error-test-module'}
+2025-05-30T18:07:27.211Z
+[INFO]	2025-05-30T18:07:27.211Z	faf569b5-6211-4d39-afb4-368713cead7e	Using precise time window from alarm reasonData: 2025-05-30 18:06:00+00:00 to 2025-05-30 18:07:00+00:00
+
+[INFO] 2025-05-30T18:07:27.211Z faf569b5-6211-4d39-afb4-368713cead7e Using precise time window from alarm reasonData: 2025-05-30 18:06:00+00:00 to 2025-05-30 18:07:00+00:00
+2025-05-30T18:07:27.211Z
+[INFO]	2025-05-30T18:07:27.211Z	faf569b5-6211-4d39-afb4-368713cead7e	Using filter pattern: { ($.log_processed.message = "*create netty connection*") || ($.log_processed.errorMessage = "*create netty connection*") } for log group /aws/containerinsights/multi-phse-dev-use1/application
+
+[INFO] 2025-05-30T18:07:27.211Z faf569b5-6211-4d39-afb4-368713cead7e Using filter pattern: { ($.log_processed.message = "*create netty connection*") || ($.log_processed.errorMessage = "*create netty connection*") } for log group /aws/containerinsights/multi-phse-dev-use1/application
+2025-05-30T18:07:27.553Z
+[INFO]	2025-05-30T18:07:27.553Z	faf569b5-6211-4d39-afb4-368713cead7e	Found 1 log event(s). Taking the last one.
+
+[INFO] 2025-05-30T18:07:27.553Z faf569b5-6211-4d39-afb4-368713cead7e Found 1 log event(s). Taking the last one.
+2025-05-30T18:07:27.553Z
+[INFO]	2025-05-30T18:07:27.553Z	faf569b5-6211-4d39-afb4-368713cead7e	Publishing to SNS topic: arn:aws:sns:us-east-1:024848441612:FIS-Monitoring-Topic-xMatters
+
+[INFO] 2025-05-30T18:07:27.553Z faf569b5-6211-4d39-afb4-368713cead7e Publishing to SNS topic: arn:aws:sns:us-east-1:024848441612:FIS-Monitoring-Topic-xMatters
+2025-05-30T18:07:27.677Z
+[INFO]	2025-05-30T18:07:27.676Z	faf569b5-6211-4d39-afb4-368713cead7e	Successfully published message to SNS.
+
+[INFO] 2025-05-30T18:07:27.676Z faf569b5-6211-4d39-afb4-368713cead7e Successfully published message to SNS.
+2025-05-30T18:07:27.679Z
+END RequestId: faf569b5-6211-4d39-afb4-368713cead7e
+
+END RequestId: faf569b5-6211-4d39-afb4-368713cead7e
+2025-05-30T18:07:27.679Z
+REPORT RequestId: faf569b5-6211-4d39-afb4-368713cead7e	Duration: 566.90 ms	Billed Duration: 567 ms	Memory Size: 256 MB	Max Memory Used: 82 MB	Init 
