@@ -1,3 +1,9 @@
+#===========================================================================
+# Function: FIS-Monitoring-Alarm-Cleanup
+# Purpose:  Lambda funtion used to sanitize alarms and publish to SNS
+# Author:   Jason Mensing (jason.mensing@fisglobal.com)
+# Version:  1.00
+#===========================================================================
 
 # Import required modules
 import json
@@ -22,6 +28,7 @@ XMATTERS_TOPIC_NAME="FIS-Monitoring-Topic-xMatters"
 
 # Identify supported alarm tags
 allowedAlarmTags = ['severity','hostname','os','type','disk','incidentgroup','callout','ec2instanceid']
+allowedRGTags = ['createincident','hostname','type','incidentgroup','callout','description']
 
 
 ###############
@@ -152,6 +159,92 @@ def event_is_cloudwatch(event,rawevent,allowedTags,sns_topic_arn):
     return(response)
 
 
+# Use this to parse cloudwatch alarms
+def event_is_appinsights(event,rawevent,allowedTags,sns_topic_arn):
+    
+    # Print the list of supported alarm tags
+    print("Supported Resource Group Tags:")
+    print(allowedTags)
+    
+    # Parse out desired data
+    source = event['source']
+    account_id = event['account']
+    time = event['time']
+    region = event['region']
+    detail_type = event['detail-type']
+    
+    rg_name = event['detail']['resourceGroupName']
+    severity = event['detail']['severity']
+    alarm_status = event['detail']['status']
+    problem_url = event['detail']['problemUrl']
+    affected_resource = event['detail']['affectedResource']
+    
+    # Determine Alarm/OK from alarm_status (IGNORE'|'RESOLVED'|'PENDING'|'RECURRING'|'RECOVERING)
+    alarm_state = "Alarm"
+    if alarm_status == 'IGNORE' or alarm_status == 'RESOLVED':
+        alarm_state = "OK"
+        
+    # Compile Subject for SNS Topic
+    subject = (
+        f"AWS {alarm_state}: {rg_name}"
+    )
+
+    # Create dictionary of fields for SNS MessageAttributes value
+    messageAttributes = {}
+    messageAttributes['source'] = {"DataType": "String", "StringValue": source}
+    messageAttributes['severity'] = {"DataType": "String", "StringValue": severity}
+    messageAttributes['rawevent'] = {"DataType": "String", "StringValue": rawevent}
+    messageAttributes['fromlambda'] = {"DataType": "String", "StringValue": "yes"}
+    messageAttributes['type'] = {"DataType": "String", "StringValue": "unspecified"}
+    
+    # Get resource group arn
+    rg_info = rg.get_group(Group=rg_name)
+    rg_arn = rg_info['Group']['GroupArn']
+    
+    # Get resource group tags
+    rg_tags = rg.get_tags(Arn=rg_arn)['Tags']
+    
+    # Add alarm tags to the messageAttributes dictionary
+    alarm_description = ''
+    create_incident = 'no'
+    for alarm_tag in rg_tags:
+        alarm_value = rg_tags[alarm_tag]
+        
+        # Only include supoprted alarm tags
+        if alarm_tag in allowedTags:
+            print("Found ResourceGroup Tag: " + alarm_tag + " = " + alarm_value)
+            messageAttributes[alarm_tag] = {"DataType": "String", "StringValue": alarm_value}
+        
+        # Get the value of the description tag if it exists
+        if alarm_tag == 'description':
+            alarm_description = " - " + alarm_value
+
+        # Get the value of the createincident tag if it exists
+        if alarm_tag == 'createincident' and alarm_value == 'y':
+            create_incident = 'yes'
+    
+    # Convert raw event to a string to use as the SNS Message
+    message = "{"
+    message += "\"AlarmName\":\"" + rg_name + "\","
+    message += "\"AlarmDescription\":\"" + detail_type + " - " + affected_resource + alarm_description + "\","
+    message += "\"AWSAccountId\":\"" + account_id + "\","
+    message += "\"Region\":\"" + region + "\","
+    message += "\"StateChangeTime\":\"" + time + "\","
+    message += "\"NewStateValue\":\"" + alarm_state + "\","
+    message += "\"NewStateReason\":\"" + problem_url + "\""
+    message += "}"
+
+    # Publish the message to the SNS topic and get the response
+    # IF the createincident tag was found with a value of y
+    response = "Problem ignored because the ResourceGroup is not tagged with createincident:y"
+    if (create_incident == 'yes'):
+        response = publish_alarm(sns_topic_arn,subject,message,messageAttributes)
+        print("Publishing event to SNS Topic")
+    
+    # Print and return the response
+    print(response)
+    return(response)
+    
     
 # This function publishes to the SNS Topic
 def publish_alarm(sns_topic_arn,subject,message,messageAttributes):
