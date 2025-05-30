@@ -1,0 +1,46 @@
+2025-05-30T11:13:26.415Z
+[INFO]	2025-05-30T11:13:26.415Z	21e88f87-2306-4736-82d5-9f9b43edcb2e	Raw Event:
+
+[INFO] 2025-05-30T11:13:26.415Z 21e88f87-2306-4736-82d5-9f9b43edcb2e Raw Event:
+2025-05-30T11:13:26.416Z
+[INFO]	2025-05-30T11:13:26.416Z	21e88f87-2306-4736-82d5-9f9b43edcb2e	
+{
+    "source": "aws.cloudwatch",
+    "alarmArn": "arn:aws:cloudwatch:us-east-1:024848441612:alarm:multi-phse-dev-use1-updated by another user",
+    "accountId": "024848441612",
+    "time": "2025-05-30T11:12:30.449+0000",
+    "region": "us-east-1",
+    "alarmData": {
+        "alarmName": "multi-phse-dev-use1-updated by another user",
+        "state": {
+            "value": "ALARM",
+            "reason": "Threshold Crossed: 1 datapoint [1.0 (30/05/25 11:11:00)] was greater than or equal to the threshold (1.0).",
+            "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2025-05-30T11:12:30.447+0000\",\"startDate\":\"2025-05-30T11:11:00.000+0000\",\"statistic\":\"Sum\",\"period\":60,\"recentDatapoints\":[1.0],\"threshold\":1.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2025-05-30T11:11:00.000+0000\",\"sampleCount\":1.0,\"value\":1.0}]}",
+            "timestamp": "2025-05-30T11:12:30.449+0000"
+        },
+        "previousState": {
+            "value": "INSUFFICIENT_DATA",
+            "reason": "Insufficient Data: 1 datapoint was unknown.",
+            "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2025-05-30T10:34:30.449+0000\",\"statistic\":\"Sum\",\"period\":60,\"recentDatapoints\":[],\"threshold\":1.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2025-05-30T10:33:00.000+0000\"}]}",
+            "timestamp": "2025-05-30T10:34:30.449+0000"
+        },
+        "configuration": {
+            "description": "updated by another user error has occurred in the log events.",
+            "metrics": [
+                {
+                    "id": "cacb8b1d-f15d-cbe4-ab53-ff525254864f",
+                    "metricStat": {
+                        "metric": {
+                            "namespace": "Payment-Hub_Application_Error_Monitoring",
+                            "name": "updated by another user_Count",
+                            "dimensions": {}
+                        },
+                        "period": 60,
+                        "stat": "Sum"
+                    },
+                    "returnData": true
+                }
+            ]
+        }
+    }
+}
