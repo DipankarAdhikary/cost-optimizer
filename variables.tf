@@ -10,7 +10,7 @@ variable "low_severity_error_keywords" {
     "objects present in a non-final state", "objects present in pending/partial approved",
     "FailureException: javax.persistence.PersistenceException", "LockAcquisitionException", "RollbackException",
     "UnmarshalException: Problem finding error class", "EJB Invocation failed on component CRUDSessionBean",
-    "Not in GZIP format", "EmptyStackException: Empty stack", "org.bouncycastle.openpgp.PGPException","updated by another user"
+    "Not in GZIP format", "EmptyStackException: Empty stack", "org.bouncycastle.openpgp.PGPException","updated by another user","create netty connection"
   ]
 }
 
@@ -88,6 +88,29 @@ variable "tag_app_group_email" {
   default     = "cm.cl.platform.paymenthubtechnicalsupport@fisglobal.com"
 }
 
+variable "tag_solution_central_id" {
+  description = "The Asset ID related to the entry in Solution Central for the product to be deployed on the given asset."
+  type        = string
+  default     = "12215"
+}
+
+variable "tag_environment_type" {
+  description = "The tier of environment for the application -- this is separate from the service level defined at the subscription level."
+  default     = "Production"
+}
+
+variable "lambda_timeout" {
+  description = "Timeout for the Lambda function in seconds."
+  type        = number
+  default     = 900 # 15 minutes
+}
+
+variable "lambda_memory_size" {
+  description = "Memory allocation for the Lambda function in MB."
+  type        = number
+  default     = 256
+}
+
 variable "enable_fis_monitoring" {
   type        = bool
   default     = true
@@ -105,3 +128,4 @@ variable "threshold" {
   type        = number
   default     = 1
 }
+
