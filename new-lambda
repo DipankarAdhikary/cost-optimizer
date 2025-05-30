@@ -143,7 +143,6 @@ def lambda_handler(event, context):
 
         # --- Information directly from the alarm event ---
         alarm_name = alarm_data.get('alarmName', 'N/A')
-        # alarm_description is from alarm_data.configuration.description
         alarm_description_from_event = alarm_data.get('configuration', {}).get('description', 'N/A')
         account_id = original_event.get('accountId', 'N/A')
         region = original_event.get('region', 'N/A')
@@ -155,28 +154,62 @@ def lambda_handler(event, context):
         alarm_tags = get_alarm_tags(alarm_arn)
         log_group_name_tag = alarm_tags.get('LogGroupName')
         error_keyword_tag = alarm_tags.get('ErrorKeyword')
-        # Add other important tags you want to pass to xMatters via MessageAttributes
-        # For example: severity, type, incidentgroup, callout, AlarmCategory
 
-        log_details_snippet = "\n\n--- No specific log event details could be retrieved ---"
+        log_details_snippet = "\n\n--- No specific log event details could be retrieved ---" # Default value
 
         if log_group_name_tag and error_keyword_tag:
-            # ... (log fetching logic as before - this remains the same) ...
-            # This populates log_details_snippet
+            logger.info(f"Attempting to fetch log details for LogGroup: {log_group_name_tag}, Keyword: {error_keyword_tag}")
             triggering_log = fetch_triggering_log_event(log_group_name_tag, error_keyword_tag, alarm_data)
+
             if triggering_log:
-                # ... (parsing logic for triggering_log as before) ...
-                # This updates log_details_snippet
-                pass # Placeholder for the detailed parsing logic already outlined
+                logger.debug(f"Raw triggering_log content: {json.dumps(triggering_log)}") # For detailed debugging
+                try:
+                    log_message_str = triggering_log.get('message', '{}')
+                    log_entry_data = json.loads(log_message_str) # The log line itself is JSON
+
+                    log_processed = log_entry_data.get('log_processed', {})
+                    kubernetes_info = log_entry_data.get('kubernetes', {})
+
+                    pod_name = kubernetes_info.get('pod_name', 'N/A')
+                    namespace_name = kubernetes_info.get('namespace_name', 'N/A')
+                    detailed_error_message = log_processed.get('message', 'N/A') # This is from log_processed.message
+                    stack_trace_full = log_processed.get('errorStackTrace', 'N/A')
+                    
+                    # Truncate stack trace
+                    stack_trace_truncated = (stack_trace_full[:MAX_STACK_TRACE_LENGTH] + '...' 
+                                             if len(stack_trace_full) > MAX_STACK_TRACE_LENGTH 
+                                             else stack_trace_full)
+
+                    log_details_snippet = (
+                        f"\n\n--- Associated Log Event Details ---\n"
+                        f"Log Group: {log_group_name_tag}\n"
+                        f"Pod Name: {pod_name}\n"
+                        f"Namespace: {namespace_name}\n"
+                        f"Error Keyword Matched: {error_keyword_tag}\n"
+                        f"Log Message: {detailed_error_message}\n"
+                        f"StackTrace (first {MAX_STACK_TRACE_LENGTH} chars):\n{stack_trace_truncated}"
+                    )
+                    logger.info("Successfully extracted and formatted log details.")
+                except json.JSONDecodeError as je:
+                    logger.error(f"Failed to parse log event message string: '{log_message_str}'. Error: {je}")
+                    log_details_snippet = f"\n\n--- Error parsing retrieved log event (JSONDecodeError) for keyword '{error_keyword_tag}' in {log_group_name_tag} ---"
+                except Exception as e:
+                    logger.error(f"Unexpected error processing retrieved log event: {e}", exc_info=True)
+                    log_details_snippet = f"\n\n--- Unexpected error processing retrieved log event for keyword '{error_keyword_tag}' in {log_group_name_tag} ---"
+            else:
+                logger.info(f"Could not find a specific triggering log event for keyword '{error_keyword_tag}'.")
+                log_details_snippet = f"\n\n--- No specific log event found for keyword '{error_keyword_tag}' in {log_group_name_tag} ---"
+        else:
+            logger.warning("LogGroupName or ErrorKeyword tag not found on the alarm. Cannot fetch log details.")
+            log_details_snippet = "\n\n--- LogGroupName or ErrorKeyword tag missing on alarm; cannot fetch log details ---"
 
         # --- Construct the SNS Message body (JSON string) ---
-        # This structure mimics what lambda-incident's `message` string would contain
         final_sns_message_payload = {
             "AlarmName": alarm_name,
             "AlarmDescription": alarm_description_from_event, 
             "AWSAccountId": account_id,
             "Region": region,
-            "StateChangeTime": state_change_time, # Using the top-level event time
+            "StateChangeTime": state_change_time,
             "NewStateValue": new_state_value,
             "NewStateReason": original_alarm_reason + log_details_snippet
         }
@@ -184,17 +217,13 @@ def lambda_handler(event, context):
 
         # --- Construct SNS MessageAttributes ---
         sns_message_attributes = {
-            'source': {'DataType': 'String', 'StringValue': 'aws.cloudwatch'}, # To identify origin
+            'source': {'DataType': 'String', 'StringValue': 'aws.cloudwatch'},
             'rawevent': {'DataType': 'String', 'StringValue': json.dumps(original_event)},
             'fromlambda': {'DataType': 'String', 'StringValue': context.function_name}
         }
-
         
-        # Define which tags from the alarm should be passed as MessageAttributes
-        # This list should include tags xMatters understands.
         tags_for_xmatters = ['severity', 'type', 'incidentgroup', 'callout', 
                                'LogGroupName', 'ErrorKeyword', 'AlarmCategory', 'hostname', 'os', 'disk', 'ec2instanceid']
-                               # Add any other tags your xMatters setup might use
 
         for tag_key, tag_value in alarm_tags.items():
             if tag_key in tags_for_xmatters:
@@ -202,22 +231,19 @@ def lambda_handler(event, context):
             else:
                 logger.debug(f"Tag '{tag_key}' not in tags_for_xmatters list, not adding to MessageAttributes.")
         
-        # Ensure default severity if not present (similar to lambda-incident)
-        if 'severity' not in sns_message_attributes and 'severity' not in alarm_tags:
-            sns_message_attributes['severity'] = {'DataType': 'String', 'StringValue': 'Medium'} # Default
-        if 'type' not in sns_message_attributes and 'type' not in alarm_tags:
-             sns_message_attributes['type'] = {'DataType': 'String', 'StringValue': 'Application Error'} # Default for app errors
-
+        if 'severity' not in sns_message_attributes and 'severity' not in alarm_tags: # Check both places
+            sns_message_attributes['severity'] = {'DataType': 'String', 'StringValue': 'Medium'} 
+        if 'type' not in sns_message_attributes and 'type' not in alarm_tags: # Check both places
+             sns_message_attributes['type'] = {'DataType': 'String', 'StringValue': 'Application Error'} 
 
         # --- Compile Subject for SNS ---
         alarm_state_for_subject = new_state_value
         if alarm_state_for_subject == 'ALARM':
-            alarm_state_for_subject = 'Alarm' # Match lambda-incident's subject format
+            alarm_state_for_subject = 'Alarm'
         
         sns_subject = f"AWS {alarm_state_for_subject}: {alarm_name}"
-        if "OK" in new_state_value: # If it's an OK to clear alarm
+        if "OK" in new_state_value.upper(): # Make check case-insensitive for "OK"
              sns_subject = f"AWS OK: {alarm_name}"
-
 
         logger.info(f"Publishing to SNS topic: {TARGET_SNS_TOPIC_ARN}")
         logger.debug(f"SNS Subject: {sns_subject}")
