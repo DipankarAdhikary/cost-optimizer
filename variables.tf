@@ -251,7 +251,7 @@ variable "optimization_exclude_tag_value" {
 variable "sns_subscription_email" {
   description = "Email address to subscribe to the SNS topic for receiving notifications."
   type        = string
-  default     = "" # Optional: Leave empty if no subscription is required
+  default     = "dipankar.adhikary@fisglobal.com" # Optional: Leave empty if no subscription is required
 }
 
 variable "ec2_rightsize_check_days" {
@@ -350,6 +350,12 @@ variable "enable_eks_unused_cluster_reporting" {
   default     = true
 }
 
+variable "eks_extended_support_price_hourly" {
+  description = "Hourly price for EKS Extended Support. Used to determine cost-effectiveness of clusters."
+  type        = number
+  default     = 0.50 # Example: $0.60 per hour
+}
+
 variable "enable_ec2_low_cpu_reporting" {
   description = "Enable reporting of EC2 instances with sustained low CPU utilization."
   type        = bool
@@ -360,4 +366,56 @@ variable "ec2_low_cpu_threshold_percent" {
   description = "Report EC2 instances with average CPU below this percentage over the check period."
   type        = number
   default     = 10
+}
+
+# Tags
+
+/*** Tags ***/
+
+variable "tag_buc" {
+  default = "4150.512052.9822..0000.0000.9805"
+}
+
+variable "tag_support_group" {
+  default = "Azure Cloud - CIO"
+}
+
+variable "tag_app_group_email" {
+  default = "CLBT.Global.ManagedServices.FirstLine@fisglobal.com"
+}
+
+variable "tag_environment_type" {
+  default = "Dev"
+}
+
+variable "env_type" {
+  default = "dev"
+}
+
+variable "tag_customer_crmid" {
+  default = "FIS 6015"
+}
+
+variable "tag_expiration_date" {
+  default = "Never"
+}
+
+variable "tag_on_hours" {
+  default = "Always"
+}
+
+variable "tag_sla" {
+  default = "99.9"
+}
+
+variable "tag_solution_central_id" {
+  default = "12215"
+}
+
+variable "tag_npi" {
+  default = "False"
+}
+
+variable "tag_tier" {
+  default = "System"
 }
